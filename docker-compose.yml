@@ -112,7 +112,9 @@ services:
         condition: service_healthy
     entrypoint: ["/bin/sh", "-c"]
     command:
-      - '/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic vacation.decisions --partitions 1 --replication-factor 1'
+      - /bin/sh
+      - -ec
+      - '/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic vacation.decisions --partitions 1 --replication-factor 1 && /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic vacation.decisions.dlq --partitions 1 --replication-factor 1'
     restart: "no"
 
   clickhouse:

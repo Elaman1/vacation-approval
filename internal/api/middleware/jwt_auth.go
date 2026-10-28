@@ -14,8 +14,6 @@ type userClaims struct {
 	} `json:"realm_access"`
 }
 
-// JWTAuth verifies signature, issuer, audience, expiry and the requested realm role.
-// The same UserID context contract used by our handlers is preserved.
 func JWTAuth(verifier *oidc.IDTokenVerifier, requiredRole string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		parts := strings.Fields(r.Header.Get("Authorization"))
@@ -37,7 +35,6 @@ func JWTAuth(verifier *oidc.IDTokenVerifier, requiredRole string, next http.Hand
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
-		// The subject is read only from the validated JWT, never from the request body.
 		ctx := WithUserID(r.Context(), claims.Subject)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

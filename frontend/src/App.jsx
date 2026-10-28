@@ -92,7 +92,7 @@ export default function App() {
       {isManager && <section>
         <div className="title-line"><h2>Заявки, ожидающие руководителя</h2><button className="secondary" onClick={refresh}>Обновить</button></div>
         <p>Это только список. Одобрение и отказ выполняются в Camunda Tasklist.</p>
-        <a href="http://localhost:8081/camunda/app/tasklist/default/" target="_blank" rel="noreferrer">Открыть Tasklist</a>
+        <a href={import.meta.env.VITE_CAMUNDA_TASKLIST_URL || `${window.location.protocol}//${window.location.hostname}:8081/camunda/app/tasklist/default/`} target="_blank" rel="noreferrer">Открыть Tasklist</a>
         <div className="scroll"><table><thead><tr><th>ID</th><th>Сотрудник</th><th>Дни</th><th>Статус</th></tr></thead>
           <tbody>{pending.map(req => <tr key={req.id}><td>#{req.id}</td><td>#{req.employee_id}</td><td>{req.days}</td><td>{statuses[req.status] || req.status}</td></tr>)}</tbody></table></div>
         {pending.length === 0 && <p className="muted">Ожидающих заявок нет</p>}

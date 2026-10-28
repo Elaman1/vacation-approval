@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -25,8 +26,14 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	reader := kafka.NewReader(broker)
+	groupID := os.Getenv("KAFKA_CONSUMER_GROUP")
+	if groupID == "" {
+		log.Fatal("KAFKA_CONSUMER_GROUP is required")
+	}
+	reader := kafka.NewReader(broker, groupID)
 	defer reader.Close()
+	dlq := kafka.NewDeadLetterPublisher(broker)
+	defer dlq.Close()
 	store := clickhouse.NewClient(clickhouseURL, clickhouseUser, clickhousePassword)
 	log.Println("ClickHouse consumer started")
 
@@ -45,10 +52,30 @@ func main() {
 		// Otherwise the next offset could be committed over a failed message.
 		for ctx.Err() == nil {
 			var event vacation.DecisionEvent
-			if err := json.Unmarshal(msg.Value, &event); err != nil {
-				log.Printf("invalid event at offset %d (not committing): %v", msg.Offset, err)
-				pause(ctx)
-				continue
+			parseErr := json.Unmarshal(msg.Value, &event)
+			if parseErr == nil && (event.EventID <= 0 || event.RequestID <= 0 || !vacation.IsFinalDecision(event.Decision)) {
+				parseErr = fmt.Errorf("invalid decision event fields")
+			}
+			if parseErr != nil {
+				// Do not skip a poison message unless it is durably accepted by the DLQ.
+				dlqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				err := dlq.Publish(dlqCtx, msg, parseErr.Error())
+				cancel()
+				if err != nil {
+					log.Printf("DLQ publish failed offset=%d: %v", msg.Offset, err)
+					pause(ctx)
+					continue
+				}
+				commitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				err = reader.CommitMessages(commitCtx, msg)
+				cancel()
+				if err != nil {
+					log.Printf("DLQ offset commit failed offset=%d: %v", msg.Offset, err)
+					pause(ctx)
+					continue
+				}
+				log.Printf("sent invalid event offset=%d to DLQ: %v", msg.Offset, parseErr)
+				break
 			}
 			insertCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			err := store.Insert(insertCtx, event)

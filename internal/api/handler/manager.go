@@ -21,8 +21,6 @@ func NewManagerHandler(requests PendingLister) *ManagerHandler {
 	return &ManagerHandler{requests: requests}
 }
 
-// Read-only view protected by the manager realm role.
-// Decisions are deliberately still made in Camunda Tasklist.
 func (h *ManagerHandler) Pending(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()

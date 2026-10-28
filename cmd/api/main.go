@@ -2,18 +2,20 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	apidocs "vacation-approval/internal/api/docs"
+	"vacation-approval/internal/api"
 	"vacation-approval/internal/api/handler"
-	"vacation-approval/internal/api/middleware"
 	"vacation-approval/internal/core/vacation"
 	"vacation-approval/internal/integration/camunda"
 	"vacation-approval/internal/integration/postgres"
@@ -34,8 +36,6 @@ func main() {
 	jwksURL := requiredEnv("OIDC_JWKS_URL")
 	audience := requiredEnv("OIDC_AUDIENCE")
 
-	// Static public issuer + separately reachable JWKS endpoint. This is needed
-	// for local Docker networking: browsers see localhost:8082, containers see keycloak:8080.
 	keySet := oidc.NewRemoteKeySet(context.Background(), jwksURL)
 	verifier := oidc.NewVerifier(issuer, keySet, &oidc.Config{
 		ClientID:             audience,
@@ -61,33 +61,35 @@ func main() {
 	vacationHandler := handler.NewVacationHandler(service, camundaClient)
 	managerHandler := handler.NewManagerHandler(vacationRepo)
 
-	mux := http.NewServeMux()
-	apidocs.Register(mux)
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	})
-	mux.HandleFunc("GET /ready", func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-		defer cancel()
-		if err := db.Ping(ctx); err != nil {
-			log.Printf("database ping failed: %v", err)
-			http.Error(w, "database unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"ready"}`))
-	})
-
-	mux.Handle("POST /vacations", middleware.JWTAuth(verifier, "employee", http.HandlerFunc(vacationHandler.Create)))
-	mux.Handle("GET /vacations", middleware.JWTAuth(verifier, "employee", http.HandlerFunc(vacationHandler.List)))
-	mux.Handle("GET /manager/pending-vacations", middleware.JWTAuth(verifier, "manager", http.HandlerFunc(managerHandler.Pending)))
+	mux := api.NewRouter(db, verifier, vacationHandler, managerHandler)
 
 	addr := os.Getenv("API_ADDR")
 	if addr == "" {
-		addr = "127.0.0.1:8080" // Safe local default; Compose explicitly sets API_ADDR=:8080
+		addr = "127.0.0.1:8080"
 	}
 	server := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	log.Printf("API listening on %s with Keycloak JWT verification", addr)
-	log.Fatal(server.ListenAndServe())
+	runCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	serverErr := make(chan error, 1)
+	go func() { serverErr <- server.ListenAndServe() }()
+
+	select {
+	case err := <-serverErr:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("HTTP server: %v", err)
+		}
+	case <-runCtx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("graceful shutdown failed: %v", err)
+			_ = server.Close()
+		}
+		if err := <-serverErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("HTTP server: %v", err)
+		}
+	}
+	log.Println("API stopped")
 }

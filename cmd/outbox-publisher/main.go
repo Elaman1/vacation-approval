@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -35,6 +36,29 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	// Session-level advisory lock: only one active outbox publisher per database.
+	// Holding the acquired connection keeps the lock until shutdown.
+	lockConn, err := db.Acquire(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer lockConn.Release()
+	var locked bool
+	if err := lockConn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", int64(826451093)).Scan(&locked); err != nil {
+		log.Fatal(fmt.Errorf("acquire outbox lock: %w", err))
+	}
+	if !locked {
+		log.Fatal("another outbox publisher is already running")
+	}
+	defer func() {
+		unlockCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		var unlocked bool
+		if err := lockConn.QueryRow(unlockCtx, "SELECT pg_advisory_unlock($1)", int64(826451093)).Scan(&unlocked); err != nil {
+			log.Printf("release outbox lock: %v", err)
+		}
+	}()
 
 	repo := postgres.NewOutboxRepository(db)
 	publisher := kafka.NewPublisher(broker)

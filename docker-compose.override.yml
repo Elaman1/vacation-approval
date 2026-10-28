@@ -134,6 +134,7 @@ services:
     restart: unless-stopped
     environment:
       KAFKA_BROKER: kafka:19092
+      KAFKA_CONSUMER_GROUP: ${KAFKA_CONSUMER_GROUP:-vacation-clickhouse-v1}
       CLICKHOUSE_URL: http://clickhouse:8123
       CLICKHOUSE_USER: vacation
       CLICKHOUSE_PASSWORD: vacation
@@ -147,6 +148,11 @@ services:
     build:
       context: .
       dockerfile: frontend/Dockerfile
+      args:
+        VITE_KEYCLOAK_URL: ${VITE_KEYCLOAK_URL:-}
+        VITE_KEYCLOAK_REALM: ${VITE_KEYCLOAK_REALM:-vacation}
+        VITE_KEYCLOAK_CLIENT_ID: ${VITE_KEYCLOAK_CLIENT_ID:-vacation-web}
+        VITE_CAMUNDA_TASKLIST_URL: ${VITE_CAMUNDA_TASKLIST_URL:-}
     restart: unless-stopped
     ports:
       - "127.0.0.1:5173:80"
