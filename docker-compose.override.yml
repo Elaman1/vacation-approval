@@ -1,6 +1,21 @@
 # Automatically combined with docker-compose.yml by `docker compose up`.
 # Keeps the known-working postgres/camunda/keycloak/kafka/clickhouse config intact.
 services:
+  # Initialize the persistent Kafka volume for the non-root appuser (UID 1000).
+  # Docker Compose runs this automatically before starting Kafka.
+  kafka-data-init:
+    image: alpine:3.23
+    user: "0:0"
+    restart: "no"
+    volumes:
+      - kafka_data:/kafka-data
+    command: ["/bin/sh", "-ec", "chown -R 1000:1000 /kafka-data && chmod u+rwx /kafka-data"]
+
+  kafka:
+    depends_on:
+      kafka-data-init:
+        condition: service_completed_successfully
+
   deploy-processes:
     image: curlimages/curl:8.16.0
     restart: "no"

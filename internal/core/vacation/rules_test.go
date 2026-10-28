@@ -20,6 +20,18 @@ func TestCountDays(t *testing.T) {
 			want:  3,
 		},
 		{
+			name:  "one day",
+			start: "2026-11-10",
+			end:   "2026-11-10",
+			want:  1,
+		},
+		{
+			name:  "leap day",
+			start: "2028-02-28",
+			end:   "2028-03-01",
+			want:  3,
+		},
+		{
 			name:  "cross month",
 			start: "2026-11-30",
 			end:   "2026-12-02",

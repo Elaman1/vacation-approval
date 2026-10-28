@@ -7,3 +7,11 @@
 
 frontend/node_modules/
 frontend/dist/
+
+# Local tooling and generated files
+__pycache__/
+*.py[cod]
+.vscode/
+.DS_Store
+coverage.out
+*.zip

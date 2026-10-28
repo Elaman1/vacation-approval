@@ -13,8 +13,6 @@ import (
 )
 
 func TestCreateVacationRequest(t *testing.T) {
-	// Укажи здесь переменную, которую уже используешь
-	// для отдельной тестовой БД.
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("TEST_DATABASE_URL is not set")

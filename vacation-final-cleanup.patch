@@ -1,0 +1,233 @@
+diff --git a/.gitignore b/.gitignore
+index 8093738..25a00de 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -7,3 +7,11 @@
+ 
+ frontend/node_modules/
+ frontend/dist/
++
++# Local tooling and generated files
++__pycache__/
++*.py[cod]
++.vscode/
++.DS_Store
++coverage.out
++*.zip
+diff --git a/README.md b/README.md
+index 46a3207..be3af4a 100644
+--- a/README.md
++++ b/README.md
+@@ -27,10 +27,10 @@ docker compose run --rm smoke
+ 
+ ## Проверка процесса
+ 
+-1. Откройте приложение под **employee**, создайте отпуск на 5 календарных дней.
++1. Откройте приложение под **employee**, создайте отпуск на 5 календарных дней. Начальный баланс демо-сотрудника — 20 дней.
+ 2. Заявка перейдёт в состояние **«Ожидает руководителя»**. Под **manager** она видна в списке ожидающих заявок.
+ 3. В Camunda Tasklist откройте соответствующую задачу `Manager approval`, выберите **Approve** и завершите задачу.
+-4. Вернитесь в приложение под **employee**, нажмите **«Обновить»**. Итог — `approved`, дни списаны с баланса.
++4. Вернитесь в приложение под **employee**, нажмите **«Обновить»**. Итог — `approved`, остаток баланса — 15 дней.
+ 5. Проверьте событие в ClickHouse:
+ 
+ ```bash
+diff --git a/cmd/api/main.go b/cmd/api/main.go
+index fa534b6..151bb7a 100644
+--- a/cmd/api/main.go
++++ b/cmd/api/main.go
+@@ -85,7 +85,7 @@ func main() {
+ 
+ 	addr := os.Getenv("API_ADDR")
+ 	if addr == "" {
+-		addr = "127.0.0.1:8080" // local execution; Docker API will bind :8080 in the final stage
++		addr = "127.0.0.1:8080" // Safe local default; Compose explicitly sets API_ADDR=:8080
+ 	}
+ 	server := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+ 	log.Printf("API listening on %s with Keycloak JWT verification", addr)
+diff --git a/internal/api/middleware/dev_auth.go b/internal/api/middleware/dev_auth.go
+deleted file mode 100644
+index a2d255a..0000000
+--- a/internal/api/middleware/dev_auth.go
++++ /dev/null
+@@ -1,25 +0,0 @@
+-package middleware
+-
+-import (
+-	"context"
+-	"net/http"
+-)
+-
+-type userIDKey struct{}
+-
+-func DevAuth(userID string, next http.Handler) http.Handler {
+-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+-		ctx := WithUserID(r.Context(), userID)
+-		next.ServeHTTP(w, r.WithContext(ctx))
+-	})
+-}
+-
+-func UserID(ctx context.Context) (string, bool) {
+-	userID, ok := ctx.Value(userIDKey{}).(string)
+-	return userID, ok && userID != ""
+-}
+-
+-// WithUserID is only called by trusted auth middleware.
+-func WithUserID(ctx context.Context, userID string) context.Context {
+-	return context.WithValue(ctx, userIDKey{}, userID)
+-}
+diff --git a/internal/api/middleware/user_context.go b/internal/api/middleware/user_context.go
+new file mode 100644
+index 0000000..6d66636
+--- /dev/null
++++ b/internal/api/middleware/user_context.go
+@@ -0,0 +1,16 @@
++package middleware
++
++import "context"
++
++type userIDKey struct{}
++
++// UserID returns the employee identity set by JWTAuth.
++func UserID(ctx context.Context) (string, bool) {
++	userID, ok := ctx.Value(userIDKey{}).(string)
++	return userID, ok && userID != ""
++}
++
++// WithUserID stores a validated identity in the request context.
++func WithUserID(ctx context.Context, userID string) context.Context {
++	return context.WithValue(ctx, userIDKey{}, userID)
++}
+diff --git a/internal/core/vacation/rules_test.go b/internal/core/vacation/rules_test.go
+index eaceb20..b9dc740 100644
+--- a/internal/core/vacation/rules_test.go
++++ b/internal/core/vacation/rules_test.go
+@@ -19,6 +19,18 @@ func TestCountDays(t *testing.T) {
+ 			end:   "2026-11-12",
+ 			want:  3,
+ 		},
++		{
++			name:  "one day",
++			start: "2026-11-10",
++			end:   "2026-11-10",
++			want:  1,
++		},
++		{
++			name:  "leap day",
++			start: "2028-02-28",
++			end:   "2028-03-01",
++			want:  3,
++		},
+ 		{
+ 			name:  "cross month",
+ 			start: "2026-11-30",
+diff --git a/internal/integration/postgres/vacation_repository_test.go b/internal/integration/postgres/vacation_repository_test.go
+index 7efe8d0..80f5a53 100644
+--- a/internal/integration/postgres/vacation_repository_test.go
++++ b/internal/integration/postgres/vacation_repository_test.go
+@@ -13,8 +13,6 @@ import (
+ )
+ 
+ func TestCreateVacationRequest(t *testing.T) {
+-	// Укажи здесь переменную, которую уже используешь
+-	// для отдельной тестовой БД.
+ 	databaseURL := os.Getenv("TEST_DATABASE_URL")
+ 	if databaseURL == "" {
+ 		t.Skip("TEST_DATABASE_URL is not set")
+diff --git a/scripts/preflight.py b/scripts/preflight.py
+deleted file mode 100644
+index 6d995ef..0000000
+--- a/scripts/preflight.py
++++ /dev/null
+@@ -1,92 +0,0 @@
+-"""Simple no-dependency audit before the one-command Docker build."""
+-from pathlib import Path
+-import json
+-import re
+-import sys
+-import xml.etree.ElementTree as ET
+-
+-root = Path(__file__).resolve().parent.parent
+-errors = []
+-warnings = []
+-
+-required_files = [
+-    'docker-compose.yml', 'go.mod', 'go.sum',
+-    'cmd/api/main.go', 'cmd/worker/main.go',
+-    'cmd/outbox-publisher/main.go', 'cmd/consumer/main.go',
+-    'frontend/package.json', 'frontend/src/auth.js',
+-    'frontend/src/api.js', 'frontend/src/App.jsx',
+-    'infra/keycloak/vacation-realm.json',
+-    'infra/clickhouse/001_decisions.sql',
+-    'migrations/001_init.sql', 'migrations/002_workflow.sql',
+-    'migrations/003_outbox.sql',
+-    'infra/postgres/02_create_camunda_db.sql',
+-    'infra/postgres/03_create_keycloak_db.sql',
+-    'infra/postgres/04_seed_demo_employee.sql',
+-    'process/vacation.bpmn', 'process/vacation.dmn',
+-]
+-for rel in required_files:
+-    if not (root / rel).is_file():
+-        errors.append(f'missing: {rel}')
+-
+-file = root / 'infra/keycloak/vacation-realm.json'
+-if file.is_file():
+-    try:
+-        realm = json.loads(file.read_text(encoding='utf-8'))
+-        web = next(c for c in realm['clients'] if c.get('clientId') == 'vacation-web')
+-        scopes = web.get('defaultClientScopes', [])
+-        if 'basic' not in scopes:
+-            errors.append('Keycloak vacation-web missing default scope basic (JWT sub => HTTP 401)')
+-        if 'roles' not in scopes:
+-            errors.append('Keycloak vacation-web missing default scope roles (JWT realm_access.roles)')
+-        if 'vacation-api' not in [c.get('clientId') for c in realm['clients']]:
+-            errors.append('Keycloak vacation-api client missing (JWT audience)')
+-    except (ValueError, KeyError, StopIteration) as exc:
+-        errors.append(f'invalid Keycloak realm: {exc}')
+-
+-client = root / 'internal/integration/camunda/external_task.go'
+-if client.is_file():
+-    src = client.read_text(encoding='utf-8')
+-    start = src.split('func (c *Client) StartVacation', 1)
+-    if len(start) != 2:
+-        errors.append('StartVacation missing')
+-    else:
+-        start = start[1].split('\nfunc ', 1)[0]
+-        field = re.search(r'"managerDecision"\s*:\s*map\[string\]any\s*\{([^}]*)\}', start, re.S)
+-        if not field:
+-            errors.append('StartVacation missing managerDecision variable map')
+-        elif not re.search(r'"value"\s*:\s*nil\b', field.group(1)):
+-            errors.append('StartVacation must set managerDecision to nil, not a preselected enum value (Tasklist Form failure)')
+-
+-for rel in ['process/vacation.bpmn', 'process/vacation.dmn']:
+-    try:
+-        ET.parse(root / rel)
+-    except (ET.ParseError, FileNotFoundError) as exc:
+-        errors.append(f'bad XML {rel}: {exc}')
+-
+-base = root / 'docker-compose.yml'
+-if base.is_file():
+-    text = base.read_text(encoding='utf-8')
+-    for service in ['postgres:', 'camunda:', 'keycloak:', 'kafka:', 'clickhouse:', 'kafka-init:']:
+-        if service not in text:
+-            errors.append(f'base docker-compose.yml missing {service}')
+-    for script in ['002_workflow.sql', '003_outbox.sql', '02_create_camunda_db.sql', '03_create_keycloak_db.sql', '04_seed_demo_employee.sql']:
+-        if script not in text:
+-            errors.append(f'base docker-compose.yml missing init mount {script} (clean volumes will fail)')
+-
+-api = root / 'cmd/api/main.go'
+-if api.is_file():
+-    text = api.read_text(encoding='utf-8')
+-    if 'API_ADDR' not in text:
+-        errors.append('cmd/api/main.go must honor API_ADDR=:8080 inside Docker')
+-    if 'OIDC_ISSUER' not in text:
+-        errors.append('cmd/api/main.go must verify Keycloak JWT (old DevAuth version found)')
+-
+-print('Vacation Approval preflight')
+-for warning in warnings:
+-    print('WARN', warning)
+-for err in errors:
+-    print('ERROR', err)
+-if errors:
+-    print(f'FAILED: {len(errors)} errors. Fix before docker compose up --build.')
+-    sys.exit(1)
+-print(f'OK: {len(required_files)} required project files and critical auth/config checks')

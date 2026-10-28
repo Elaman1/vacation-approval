@@ -85,7 +85,7 @@ func main() {
 
 	addr := os.Getenv("API_ADDR")
 	if addr == "" {
-		addr = "127.0.0.1:8080" // local execution; Docker API will bind :8080 in the final stage
+		addr = "127.0.0.1:8080" // Safe local default; Compose explicitly sets API_ADDR=:8080
 	}
 	server := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	log.Printf("API listening on %s with Keycloak JWT verification", addr)
