@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions
+    xmlns="https://www.omg.org/spec/DMN/20191111/MODEL/"
+    xmlns:camunda="http://camunda.org/schema/1.0/dmn"
+    id="Definitions_VacationDecision"
+    name="Vacation Decisions"
+    namespace="http://vacation-approval/dmn">
+
+  <decision
+      id="vacation_decision"
+      name="Determine vacation result"
+      camunda:historyTimeToLive="180">
+
+    <decisionTable id="DecisionTable_Vacation" hitPolicy="UNIQUE">
+
+      <input id="Input_Balance" label="Enough balance">
+        <inputExpression id="Expression_Balance" typeRef="boolean">
+          <text>hasEnoughBalance</text>
+        </inputExpression>
+      </input>
+
+      <input id="Input_Days" label="Requested days">
+        <inputExpression id="Expression_Days" typeRef="integer">
+          <text>requestedDays</text>
+        </inputExpression>
+      </input>
+
+      <input id="Input_Manager" label="Manager decision">
+        <inputExpression id="Expression_Manager" typeRef="string">
+          <text>managerDecision</text>
+        </inputExpression>
+      </input>
+
+      <output id="Output_Result" label="Result" name="result" typeRef="string"/>
+
+      <rule id="Rule_NoBalance">
+        <inputEntry id="NoBalance_Balance">
+          <text>false</text>
+        </inputEntry>
+        <inputEntry id="NoBalance_Days">
+          <text>-</text>
+        </inputEntry>
+        <inputEntry id="NoBalance_Manager">
+          <text>-</text>
+        </inputEntry>
+        <outputEntry id="NoBalance_Result">
+          <text>"rejected"</text>
+        </outputEntry>
+      </rule>
+
+      <rule id="Rule_AutoApproved">
+        <inputEntry id="AutoApproved_Balance">
+          <text>true</text>
+        </inputEntry>
+        <inputEntry id="AutoApproved_Days">
+          <text>[1..2]</text>
+        </inputEntry>
+        <inputEntry id="AutoApproved_Manager">
+          <text>-</text>
+        </inputEntry>
+        <outputEntry id="AutoApproved_Result">
+          <text>"auto_approved"</text>
+        </outputEntry>
+      </rule>
+
+      <rule id="Rule_ManagerRejected">
+        <inputEntry id="ManagerRejected_Balance">
+          <text>true</text>
+        </inputEntry>
+        <inputEntry id="ManagerRejected_Days">
+          <text>&gt; 2</text>
+        </inputEntry>
+        <inputEntry id="ManagerRejected_Manager">
+          <text>"rejected"</text>
+        </inputEntry>
+        <outputEntry id="ManagerRejected_Result">
+          <text>"rejected"</text>
+        </outputEntry>
+      </rule>
+
+      <rule id="Rule_Approved">
+        <inputEntry id="Approved_Balance">
+          <text>true</text>
+        </inputEntry>
+        <inputEntry id="Approved_Days">
+          <text>[3..14]</text>
+        </inputEntry>
+        <inputEntry id="Approved_Manager">
+          <text>"approved"</text>
+        </inputEntry>
+        <outputEntry id="Approved_Result">
+          <text>"approved"</text>
+        </outputEntry>
+      </rule>
+
+      <rule id="Rule_HRReview">
+        <inputEntry id="HRReview_Balance">
+          <text>true</text>
+        </inputEntry>
+        <inputEntry id="HRReview_Days">
+          <text>&gt; 14</text>
+        </inputEntry>
+        <inputEntry id="HRReview_Manager">
+          <text>"approved"</text>
+        </inputEntry>
+        <outputEntry id="HRReview_Result">
+          <text>"needs_hr_review"</text>
+        </outputEntry>
+      </rule>
+
+    </decisionTable>
+  </decision>
+</definitions>

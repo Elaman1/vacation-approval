@@ -1,0 +1,120 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" xmlns:camunda="http://camunda.org/schema/1.0/bpmn" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" id="Definitions_Vacation" targetNamespace="http://vacation-approval/process">
+  <bpmn:process id="vacation_approval" name="Vacation approval" isExecutable="true" camunda:historyTimeToLive="180">
+    <bpmn:startEvent id="StartEvent_Submitted" name="Vacation submitted">
+      <bpmn:outgoing>Flow_Start_Check</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:serviceTask id="Task_CheckBalance" name="Check balance" camunda:type="external" camunda:topic="check-balance">
+      <bpmn:incoming>Flow_Start_Check</bpmn:incoming>
+      <bpmn:outgoing>Flow_Check_Route</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:exclusiveGateway id="Gateway_Review" name="Manager required?" default="Flow_Route_Decision">
+      <bpmn:incoming>Flow_Check_Route</bpmn:incoming>
+      <bpmn:outgoing>Flow_Route_Manager</bpmn:outgoing>
+      <bpmn:outgoing>Flow_Route_Decision</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:serviceTask id="Task_MarkPendingManager" name="Mark pending manager" camunda:type="external" camunda:topic="mark-pending-manager">
+      <bpmn:incoming>Flow_Route_Manager</bpmn:incoming>
+      <bpmn:outgoing>Flow_Mark_Manager</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:userTask id="Task_ManagerReview" name="Manager approval" camunda:assignee="demo">
+      <bpmn:extensionElements>
+        <camunda:formData>
+          <camunda:formField id="managerDecision" label="Manager decision" type="enum">
+            <camunda:validation>
+              <camunda:constraint name="required"/>
+            </camunda:validation>
+            <camunda:value id="approved" name="Approve"/>
+            <camunda:value id="rejected" name="Reject"/>
+          </camunda:formField>
+        </camunda:formData>
+      </bpmn:extensionElements>
+      <bpmn:incoming>Flow_Mark_Manager</bpmn:incoming>
+      <bpmn:outgoing>Flow_Manager_Decision</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:businessRuleTask id="Task_EvaluateDMN" name="Evaluate vacation decision" camunda:decisionRef="vacation_decision" camunda:decisionRefBinding="deployment" camunda:resultVariable="decision" camunda:mapDecisionResult="singleEntry">
+      <bpmn:incoming>Flow_Route_Decision</bpmn:incoming>
+      <bpmn:incoming>Flow_Manager_Decision</bpmn:incoming>
+      <bpmn:outgoing>Flow_Decision_Finalize</bpmn:outgoing>
+    </bpmn:businessRuleTask>
+    <bpmn:serviceTask id="Task_Finalize" name="Finalize vacation" camunda:type="external" camunda:topic="finalize-vacation">
+      <bpmn:incoming>Flow_Decision_Finalize</bpmn:incoming>
+      <bpmn:outgoing>Flow_Finalize_End</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:endEvent id="EndEvent_Finished" name="Finished">
+      <bpmn:incoming>Flow_Finalize_End</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="Flow_Start_Check" sourceRef="StartEvent_Submitted" targetRef="Task_CheckBalance"/>
+    <bpmn:sequenceFlow id="Flow_Check_Route" sourceRef="Task_CheckBalance" targetRef="Gateway_Review"/>
+    <bpmn:sequenceFlow id="Flow_Route_Manager" sourceRef="Gateway_Review" targetRef="Task_MarkPendingManager">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression"><![CDATA[${hasEnoughBalance && requestedDays > 2}]]></bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="Flow_Route_Decision" sourceRef="Gateway_Review" targetRef="Task_EvaluateDMN"/>
+    <bpmn:sequenceFlow id="Flow_Mark_Manager" sourceRef="Task_MarkPendingManager" targetRef="Task_ManagerReview"/>
+    <bpmn:sequenceFlow id="Flow_Manager_Decision" sourceRef="Task_ManagerReview" targetRef="Task_EvaluateDMN"/>
+    <bpmn:sequenceFlow id="Flow_Decision_Finalize" sourceRef="Task_EvaluateDMN" targetRef="Task_Finalize"/>
+    <bpmn:sequenceFlow id="Flow_Finalize_End" sourceRef="Task_Finalize" targetRef="EndEvent_Finished"/>
+  </bpmn:process>
+  <bpmndi:BPMNDiagram id="BPMNDiagram_Vacation">
+    <bpmndi:BPMNPlane id="BPMNPlane_Vacation" bpmnElement="vacation_approval">
+      <bpmndi:BPMNShape id="Shape_StartEvent_Submitted" bpmnElement="StartEvent_Submitted">
+        <dc:Bounds x="100" y="220" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_CheckBalance" bpmnElement="Task_CheckBalance">
+        <dc:Bounds x="210" y="197" width="160" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Gateway_Review" bpmnElement="Gateway_Review">
+        <dc:Bounds x="450" y="212" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_MarkPendingManager" bpmnElement="Task_MarkPendingManager">
+        <dc:Bounds x="550" y="60" width="160" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_ManagerReview" bpmnElement="Task_ManagerReview">
+        <dc:Bounds x="760" y="60" width="170" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_EvaluateDMN" bpmnElement="Task_EvaluateDMN">
+        <dc:Bounds x="1020" y="197" width="160" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_Task_Finalize" bpmnElement="Task_Finalize">
+        <dc:Bounds x="1240" y="197" width="160" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_EndEvent_Finished" bpmnElement="EndEvent_Finished">
+        <dc:Bounds x="1460" y="220" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="Edge_Flow_Start_Check" bpmnElement="Flow_Start_Check">
+        <di:waypoint x="136" y="238"/>
+        <di:waypoint x="210" y="237"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_Check_Route" bpmnElement="Flow_Check_Route">
+        <di:waypoint x="370" y="237"/>
+        <di:waypoint x="450" y="237"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_Route_Manager" bpmnElement="Flow_Route_Manager">
+        <di:waypoint x="475" y="212"/>
+        <di:waypoint x="475" y="100"/>
+        <di:waypoint x="550" y="100"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_Route_Decision" bpmnElement="Flow_Route_Decision">
+        <di:waypoint x="500" y="237"/>
+        <di:waypoint x="1020" y="237"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_Mark_Manager" bpmnElement="Flow_Mark_Manager">
+        <di:waypoint x="710" y="100"/>
+        <di:waypoint x="760" y="100"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_Manager_Decision" bpmnElement="Flow_Manager_Decision">
+        <di:waypoint x="930" y="100"/>
+        <di:waypoint x="1100" y="100"/>
+        <di:waypoint x="1100" y="197"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_Decision_Finalize" bpmnElement="Flow_Decision_Finalize">
+        <di:waypoint x="1180" y="237"/>
+        <di:waypoint x="1240" y="237"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Edge_Flow_Finalize_End" bpmnElement="Flow_Finalize_End">
+        <di:waypoint x="1400" y="237"/>
+        <di:waypoint x="1460" y="238"/>
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

@@ -1,0 +1,109 @@
+openapi: 3.0.3
+info:
+  title: Vacation Approval API
+  version: 1.0.0
+  description: JWT-protected vacation requests and manager read-only overview.
+servers:
+  - url: /
+paths:
+  /health:
+    get:
+      summary: API liveness
+      responses:
+        '200': { description: API is running }
+  /ready:
+    get:
+      summary: PostgreSQL readiness
+      responses:
+        '200': { description: Database is reachable }
+        '503': { description: Database is unavailable }
+  /vacations:
+    post:
+      summary: Create a vacation and start its approval workflow
+      security: [{BearerAuth: []}]
+      description: >
+        Employee is derived from the verified Keycloak JWT sub claim.
+        Creates a request and starts the Camunda process.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateVacationRequest'
+      responses:
+        '201':
+          description: Created and process start confirmed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Vacation' }
+        '400': { description: Invalid JSON or date range }
+        '401': { description: Not authenticated }
+        '403': { description: Employee role required }
+        '404': { description: Employee not found }
+        '502': { description: Process start not confirmed; request row may exist }
+        '500': { description: Unexpected error }
+    get:
+      summary: List current employee vacation requests
+      security: [{BearerAuth: []}]
+      responses:
+        '200':
+          description: Own vacation requests, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Vacation' }
+        '401': { description: Not authenticated }
+        '403': { description: Employee role required }
+        '404': { description: Employee not found }
+        '500': { description: Unexpected error }
+  /manager/pending-vacations:
+    get:
+      summary: Manager view of pending requests (approval stays in Camunda Tasklist)
+      security: [{BearerAuth: []}]
+      responses:
+        '200':
+          description: Requests pending manager decision
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ManagerVacation' }
+        '401': { description: Missing or invalid bearer token }
+        '403': { description: Manager role required }
+        '500': { description: Unexpected error }
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    ManagerVacation:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        employee_id: { type: integer, format: int64 }
+        start_date: { type: string, format: date }
+        end_date: { type: string, format: date }
+        days: { type: integer }
+        status: { type: string, example: pending_manager }
+
+    CreateVacationRequest:
+      type: object
+      additionalProperties: false
+      required: [start_date, end_date]
+      properties:
+        start_date: { type: string, format: date, example: '2026-11-10' }
+        end_date: { type: string, format: date, example: '2026-11-16' }
+    Vacation:
+      type: object
+      required: [id, start_date, end_date, days, status]
+      properties:
+        id: { type: integer, format: int64, example: 1 }
+        start_date: { type: string, format: date }
+        end_date: { type: string, format: date }
+        days: { type: integer, example: 7 }
+        status:
+          type: string
+          enum: [pending_balance, pending_manager, auto_approved, approved, rejected, needs_hr_review, start_unconfirmed]

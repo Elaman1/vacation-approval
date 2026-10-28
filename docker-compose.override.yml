@@ -1,0 +1,186 @@
+# Automatically combined with docker-compose.yml by `docker compose up`.
+# Keeps the known-working postgres/camunda/keycloak/kafka/clickhouse config intact.
+services:
+  deploy-processes:
+    image: curlimages/curl:8.16.0
+    restart: "no"
+    depends_on:
+      camunda:
+        condition: service_started
+    volumes:
+      - ./process:/process:ro
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        echo 'Waiting for Camunda REST API...'
+        i=0
+        until curl -fsS 'http://camunda:8080/engine-rest/engine' >/dev/null; do
+          i=$$((i + 1))
+          if [ "$$i" -ge 90 ]; then echo 'Camunda not ready' >&2; exit 1; fi
+          sleep 3
+        done
+        echo 'Deploying BPMN and DMN together (skip unchanged)...'
+        curl --fail-with-body --show-error --silent \
+          -X POST 'http://camunda:8080/engine-rest/deployment/create' \
+          -F 'deployment-name=vacation-approval-compose' \
+          -F 'deployment-source=docker-compose' \
+          -F 'enable-duplicate-filtering=true' \
+          -F 'vacationBpmn=@/process/vacation.bpmn' \
+          -F 'vacationDmn=@/process/vacation.dmn'
+        echo '\nCamunda deployment complete.'
+
+
+  keycloak-ready:
+    image: curlimages/curl:8.16.0
+    restart: "no"
+    depends_on:
+      keycloak:
+        condition: service_started
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        echo 'Waiting for imported vacation realm...'
+        i=0
+        until curl -fsS 'http://keycloak:8080/realms/vacation/.well-known/openid-configuration' >/dev/null; do
+          i=$$((i + 1))
+          if [ "$$i" -ge 90 ]; then echo 'Keycloak realm not ready' >&2; exit 1; fi
+          sleep 3
+        done
+        echo 'Keycloak realm ready.'
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP: api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://vacation:vacation@postgres:5432/vacation?sslmode=disable
+      CAMUNDA_URL: http://camunda:8080/engine-rest
+      API_ADDR: ":8080"
+      OIDC_ISSUER: http://localhost:8082/realms/vacation
+      OIDC_JWKS_URL: http://keycloak:8080/realms/vacation/protocol/openid-connect/certs
+      OIDC_AUDIENCE: vacation-api
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak-ready:
+        condition: service_completed_successfully
+      deploy-processes:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP: worker
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://vacation:vacation@postgres:5432/vacation?sslmode=disable
+      CAMUNDA_URL: http://camunda:8080/engine-rest
+    depends_on:
+      postgres:
+        condition: service_healthy
+      deploy-processes:
+        condition: service_completed_successfully
+
+  outbox-publisher:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP: outbox-publisher
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://vacation:vacation@postgres:5432/vacation?sslmode=disable
+      KAFKA_BROKER: kafka:19092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+
+  consumer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP: consumer
+    restart: unless-stopped
+    environment:
+      KAFKA_BROKER: kafka:19092
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: vacation
+      CLICKHOUSE_PASSWORD: vacation
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      clickhouse:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5173:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # Optional tools: excluded from ordinary `docker compose up` by profiles.
+  smoke:
+    profiles: [tools]
+    image: python:3.13-alpine
+    working_dir: /app
+    volumes:
+      - ./scripts/smoke.py:/app/smoke.py:ro
+    environment:
+      SMOKE_API: http://api:8080
+      SMOKE_CAMUNDA: http://camunda:8080/engine-rest
+      SMOKE_KEYCLOAK: http://keycloak:8080
+      SMOKE_CLICKHOUSE: http://clickhouse:8123
+      CLICKHOUSE_USER: vacation
+      CLICKHOUSE_PASSWORD: vacation
+    depends_on:
+      api:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+      deploy-processes:
+        condition: service_completed_successfully
+      clickhouse:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    command: ["python", "-u", "/app/smoke.py"]
+
+  tests:
+    profiles: [tools]
+    image: golang:1.26.10-alpine3.23
+    working_dir: /src
+    volumes:
+      - ./:/src
+      - go_mod_cache:/go/pkg/mod
+      - go_build_cache:/root/.cache/go-build
+    environment:
+      TEST_DATABASE_URL: postgres://vacation_test:vacation_test@postgres_test:5432/vacation_test?sslmode=disable
+    depends_on:
+      postgres_test:
+        condition: service_healthy
+    command: ["sh", "-ec", "go test -count=1 ./... && go test -tags=integration -count=1 ./internal/integration/postgres"]
+
+volumes:
+  go_mod_cache:
+  go_build_cache:

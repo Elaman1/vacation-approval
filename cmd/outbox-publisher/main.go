@@ -1,0 +1,75 @@
+package main
+
+import (
+	"context"
+	"log"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"vacation-approval/internal/integration/kafka"
+	"vacation-approval/internal/integration/postgres"
+)
+
+func main() {
+	databaseURL := os.Getenv("DATABASE_URL")
+	broker := os.Getenv("KAFKA_BROKER")
+	if databaseURL == "" || broker == "" {
+		log.Fatal("DATABASE_URL and KAFKA_BROKER are required")
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	db, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	err = db.Ping(pingCtx)
+	cancel()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	repo := postgres.NewOutboxRepository(db)
+	publisher := kafka.NewPublisher(broker)
+	defer publisher.Close()
+	log.Println("outbox publisher started")
+
+	for ctx.Err() == nil {
+		if err := publishPending(ctx, repo, publisher); err != nil {
+			log.Printf("outbox: %v", err)
+		}
+		select {
+		case <-time.After(time.Second):
+		case <-ctx.Done():
+		}
+	}
+}
+
+func publishPending(ctx context.Context, repo *postgres.OutboxRepository, publisher *kafka.Publisher) error {
+	queryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	events, err := repo.Pending(queryCtx, 20)
+	cancel()
+	if err != nil {
+		return err
+	}
+	for _, event := range events {
+		publishCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		err := publisher.Publish(publishCtx, event)
+		cancel()
+		if err != nil {
+			return err // retry on next poll
+		}
+		if err := repo.MarkPublished(ctx, event.EventID); err != nil {
+			return err // Kafka may receive a duplicate; event_id stays stable
+		}
+		log.Printf("published event=%d request=%d decision=%s", event.EventID, event.RequestID, event.Decision)
+	}
+	return nil
+}
